@@ -28,7 +28,7 @@ try:
         _find_most_related_edges_from_entities,
         _find_most_related_text_unit_from_entities,
     )
-    from nano_graphrag._utils import EmbeddingFunc, compute_args_hash
+    from nano_graphrag._utils import EmbeddingFunc
 
 except ImportError:
     print(
@@ -46,8 +46,6 @@ logging.getLogger("nano-graphrag").setLevel(logging.INFO)
 filestorage_path = Path(settings.KH_FILESTORAGE_PATH) / "nano_graphrag"
 filestorage_path.mkdir(parents=True, exist_ok=True)
 
-INDEX_BATCHSIZE = 4
-
 
 def get_llm_func(model):
     async def llm_func(
@@ -55,7 +53,6 @@ def get_llm_func(model):
     ) -> str:
         input_messages = [SystemMessage(text=system_prompt)] if system_prompt else []
 
-        hashing_kv = kwargs.pop("hashing_kv", None)
         if history_messages:
             for msg in history_messages:
                 if msg.get("role") == "user":
@@ -64,20 +61,10 @@ def get_llm_func(model):
                     input_messages.append(AIMessage(text=msg["content"]))
 
         input_messages.append(HumanMessage(text=prompt))
-
-        if hashing_kv is not None:
-            args_hash = compute_args_hash("model", input_messages)
-            if_cache_return = await hashing_kv.get_by_id(args_hash)
-            if if_cache_return is not None:
-                return if_cache_return["return"]
-
         output = model(input_messages).text
 
         print("-" * 50)
         print(output, "\n", "-" * 50)
-
-        if hashing_kv is not None:
-            await hashing_kv.upsert({args_hash: {"return": output, "model": "model"}})
 
         return output
 
@@ -209,6 +196,7 @@ def build_graphrag(working_dir, llm_func, embedding_func):
         best_model_func=llm_func,
         cheap_model_func=llm_func,
         embedding_func=embedding_func,
+        embedding_func_max_async=4,
     )
     return graphrag_func
 
@@ -232,9 +220,7 @@ class NanoGraphRAGIndexingPipeline(GraphRAGIndexingPipeline):
         )
 
         all_docs = [
-            doc.text
-            for doc in docs
-            if doc.metadata.get("type", "text") == "text" and len(doc.text.strip()) > 0
+            doc.text for doc in docs if doc.metadata.get("type", "text") == "text"
         ]
 
         yield Document(
@@ -255,23 +241,7 @@ class NanoGraphRAGIndexingPipeline(GraphRAGIndexingPipeline):
         )
         # output must be contain: Loaded graph from
         # ..input/graph_chunk_entity_relation.graphml with xxx nodes, xxx edges
-        total_docs = len(all_docs)
-        process_doc_count = 0
-        yield Document(
-            channel="debug",
-            text=f"[GraphRAG] Indexed {process_doc_count} / {total_docs} documents.",
-        )
-        for doc_id in range(0, len(all_docs), INDEX_BATCHSIZE):
-            cur_docs = all_docs[doc_id : doc_id + INDEX_BATCHSIZE]
-            graphrag_func.insert(cur_docs)
-            process_doc_count += len(cur_docs)
-            yield Document(
-                channel="debug",
-                text=(
-                    f"[GraphRAG] Indexed {process_doc_count} "
-                    f"/ {total_docs} documents."
-                ),
-            )
+        graphrag_func.insert(all_docs)
 
         yield Document(
             channel="debug",

@@ -1,10 +1,11 @@
 import html
+import re
 import logging
 import threading
 from collections import defaultdict
 from difflib import SequenceMatcher
 from functools import partial
-from typing import Generator
+from typing import Generator, Optional, List, Tuple
 
 import numpy as np
 import tiktoken
@@ -15,7 +16,7 @@ from ktem.reasoning.prompt_optimization import (
     DecomposeQuestionPipeline,
     RewriteQuestionPipeline,
 )
-from ktem.utils.plantuml import PlantUML
+from ktem.utils.plantuml import PlantUML, PlantUMLHTTPError
 from ktem.utils.render import Render
 from ktem.utils.visualize_cited import CreateCitationVizPipeline
 from plotly.io import to_json
@@ -37,8 +38,10 @@ from kotaemon.llms import ChatLLM, PromptTemplate
 from ..utils import SUPPORTED_LANGUAGE_MAP
 from .base import BaseReasoning
 
+# Configure logging
 logger = logging.getLogger(__name__)
 
+# Constants
 EVIDENCE_MODE_TEXT = 0
 EVIDENCE_MODE_TABLE = 1
 EVIDENCE_MODE_CHATBOT = 2
@@ -46,6 +49,28 @@ EVIDENCE_MODE_FIGURE = 3
 MAX_IMAGES = 10
 CITATION_TIMEOUT = 5.0
 
+# Visualization settings
+VISUALIZATION_SETTINGS = {
+    "Original Query": {"color": "red", "opacity": 1, "symbol": "cross", "size": 15},
+    "Retrieved": {"color": "green", "opacity": 1, "symbol": "circle", "size": 10},
+    "Chunks": {"color": "blue", "opacity": 0.4, "symbol": "circle", "size": 10},
+    "Sub-Questions": {"color": "purple", "opacity": 1, "symbol": "star", "size": 15},
+}
+
+def strip_code_fences(text: str) -> str:
+    """
+    Removes Markdown code fences from PlantUML text.
+    
+    Args:
+        text (str): The PlantUML text potentially wrapped in Markdown code fences.
+    
+    Returns:
+        str: Clean PlantUML text without code fences.
+    """
+    # Remove ```plantuml and ``` from the text
+    text = re.sub(r'^```plantuml\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'```$', '', text, flags=re.MULTILINE)
+    return text.strip()
 
 def find_text(search_span, context):
     sentence_list = search_span.split("\n")
@@ -62,7 +87,6 @@ def find_text(search_span, context):
                 matches.append((match.b, match.b + match.size))
 
     return matches
-
 
 class PrepareEvidencePipeline(BaseComponent):
     """Prepare the evidence text from the list of retrieved documents
@@ -157,11 +181,11 @@ class PrepareEvidencePipeline(BaseComponent):
             evidence_mode = EVIDENCE_MODE_TABLE
 
         # trim context by trim_len
-        print("len (original)", len(evidence))
+        logger.info(f"len (original): {len(evidence)}")
         if evidence:
             texts = evidence_trim_func([Document(text=evidence)])
             evidence = texts[0].text
-            print("len (trimmed)", len(evidence))
+            logger.info(f"len (trimmed): {len(evidence)}")
 
         return Document(content=(evidence_mode, evidence, images))
 
@@ -174,6 +198,8 @@ DEFAULT_QA_TEXT_PROMPT = (
     "{context}\n"
     "Question: {question}\n"
     "Helpful Answer:"
+    "Please provide evidences in the following JSON format:\n"
+    "{\"evidences\": [\"Evidence 1\", \"Evidence 2\"]}"
 )
 
 DEFAULT_QA_TABLE_PROMPT = (
@@ -185,6 +211,7 @@ DEFAULT_QA_TABLE_PROMPT = (
     "{context}\n"
     "Question: {question}\n"
     "Helpful Answer:"
+    
 )  # noqa
 
 DEFAULT_QA_CHATBOT_PROMPT = (
@@ -423,6 +450,36 @@ class AnswerWithContextPipeline(BaseComponent):
 
         return answer
 
+    def prepare_mindmap(self, answer) -> Optional[Document]:
+        mindmap = answer.metadata.get("mindmap")
+        if mindmap:
+            mindmap_text = mindmap.text.strip()
+            mindmap_text = strip_code_fences(mindmap_text)
+            
+            if not mindmap_text:
+                logger.error("Error: mindmap_text is empty after stripping code fences.")
+                return None
+
+            logger.info(f"Mindmap Text: {mindmap_text}")  # Debugging
+
+            try:
+                # Ensure the correct PlantUML server URL is used
+                uml_renderer = PlantUML(url="http://www.plantuml.com/plantuml/svg/")
+                mindmap_svg = uml_renderer.process(mindmap_text)
+            except PlantUMLHTTPError as e:
+                logger.error(f"PlantUML Processing Error: {e}")
+                logger.error(f"Response Content: {e.content.decode('utf-8')}")
+                return None
+
+            # Wrap SVG in div for fixed height and pan functionality
+            svg_content = (
+                "<div id='mindmap-wrapper' style='height: 400px; overflow: hidden;'>"
+                f"{mindmap_svg}</div>"
+            )
+
+            return Document(channel="info", content=svg_content)
+        else:
+            return None
 
 class AddQueryContextPipeline(BaseComponent):
 
@@ -631,29 +688,36 @@ class FullQAPipeline(BaseReasoning):
             )
         return with_citation, without_citation
 
-    def prepare_mindmap(self, answer) -> Document | None:
-        mindmap = answer.metadata["mindmap"]
+    def prepare_mindmap(self, answer) -> Optional[Document]:
+        mindmap = answer.metadata.get("mindmap")
         if mindmap:
-            mindmap_text = mindmap.text
-            uml_renderer = PlantUML()
-            mindmap_svg = uml_renderer.process(mindmap_text)
+            mindmap_text = mindmap.text.strip()
+            mindmap_text = strip_code_fences(mindmap_text)
+            
+            if not mindmap_text:
+                logger.error("Error: mindmap_text is empty after stripping code fences.")
+                return None
 
-            mindmap_content = Document(
-                channel="info",
-                content=Render.collapsible(
-                    header="""
-                    <i>Mindmap</i>
-                    <a href="#" id='mindmap-toggle'">
-                        [Expand]
-                    </a>""",
-                    content=mindmap_svg,
-                    open=True,
-                ),
+            logger.info(f"Mindmap Text: {mindmap_text}")  # Debugging
+
+            try:
+                # Ensure the correct PlantUML server URL is used
+                uml_renderer = PlantUML(url="http://www.plantuml.com/plantuml/svg/")
+                mindmap_svg = uml_renderer.process(mindmap_text)
+            except PlantUMLHTTPError as e:
+                logger.error(f"PlantUML Processing Error: {e}")
+                logger.error(f"Response Content: {e.content.decode('utf-8')}")
+                return None
+
+            # Wrap SVG in div for fixed height and pan functionality
+            svg_content = (
+                "<div id='mindmap-wrapper' style='height: 400px; overflow: hidden;'>"
+                f"{mindmap_svg}</div>"
             )
-        else:
-            mindmap_content = None
 
-        return mindmap_content
+            return Document(channel="info", content=svg_content)
+        else:
+            return None
 
     def prepare_citation_viz(self, answer, question, docs) -> Document | None:
         doc_texts = [doc.text for doc in docs]
@@ -988,6 +1052,10 @@ class FullDecomposeQAPipeline(FullQAPipeline):
             yield from without_citation
 
         return answer
+
+    def prepare_mindmap(self, answer) -> Optional[Document]:
+        # This method can be inherited or overridden as needed
+        return super().prepare_mindmap(answer)
 
     @classmethod
     def get_user_settings(cls) -> dict:

@@ -46,7 +46,7 @@ RUN --mount=type=ssh  \
 
 RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \
-    if [ "$TARGETARCH" = "amd64" ]; then pip install "graphrag<=0.3.6" future; fi
+    if [ "$TARGETARCH" = "amd64" ]; then pip install graphrag future; fi
 
 # Clean up
 RUN apt-get autoremove \
@@ -80,12 +80,6 @@ RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \
     pip install -e "libs/kotaemon[adv]" \
     && pip install unstructured[all-docs]
-
-# Install lightRAG
-ENV USE_LIGHTRAG=true
-RUN --mount=type=ssh  \
-    --mount=type=cache,target=/root/.cache/pip  \
-    pip install aioboto3 nano-vectordb ollama xxhash lightrag-hku
 
 # Clean up
 RUN apt-get autoremove \

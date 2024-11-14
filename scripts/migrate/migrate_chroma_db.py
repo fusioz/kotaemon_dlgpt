@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime
 
 import chromadb
 from ktem.index.models import Index
@@ -16,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Session
-from tzlocal import get_localzone
+from sqlalchemy.sql import func
 
 
 def _init_resource(private: bool = True, id: int = 1):
@@ -42,7 +41,7 @@ def _init_resource(private: bool = True, id: int = 1):
                 "path": Column(String),
                 "size": Column(Integer, default=0),
                 "date_created": Column(
-                    DateTime(timezone=True), default=datetime.now(get_localzone())
+                    DateTime(timezone=True), server_default=func.now()
                 ),
                 "user": Column(Integer, default=1),
                 "note": Column(
@@ -67,7 +66,7 @@ def _init_resource(private: bool = True, id: int = 1):
                 "path": Column(String),
                 "size": Column(Integer, default=0),
                 "date_created": Column(
-                    DateTime(timezone=True), default=datetime.now(get_localzone())
+                    DateTime(timezone=True), server_default=func.now()
                 ),
                 "user": Column(Integer, default=1),
                 "note": Column(

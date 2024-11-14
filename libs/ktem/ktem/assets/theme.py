@@ -18,6 +18,21 @@ gray = colors.Color(
     c950="#010104",
 )
 
+custom_blue = colors.Color(
+    name="custom_blue",
+    c50="#e3e7f7",
+    c100="#c7cfee",
+    c200="#aab7e6",
+    c300="#8e9fde",
+    c400="#7187d6",
+    c500="#5570ce",
+    c600="#042498",
+    c700="#041d78",
+    c800="#031660",
+    c900="#020f48",
+    c950="#010830",
+)
+
 err_txt = "#f05656"
 gradient = "linear-gradient(90deg, *primary_400 20%, *secondary_500 80%)"
 gradient_muted = "linear-gradient(90deg, *primary_500 20%, *secondary_600 80%)"
@@ -152,7 +167,7 @@ class Kotaemon(Soft):
     def __init__(
         self,
         *,
-        primary_hue: colors.Color | str = colors.emerald,
+        primary_hue: colors.Color | str = custom_blue,
         secondary_hue: colors.Color | str = colors.blue,
         neutral_hue: colors.Color | str = gray,
         spacing_size: sizes.Size | str = sizes.spacing_md,

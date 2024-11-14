@@ -5,8 +5,10 @@ from __future__ import print_function
 import base64
 import string
 from zlib import compress
+import re
+import logging
 
-import httplib2
+import httpx
 import six  # type: ignore
 
 if six.PY2:
@@ -14,6 +16,9 @@ if six.PY2:
 else:
     maketrans = bytes.maketrans
 
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 plantuml_alphabet = (
     string.digits + string.ascii_uppercase + string.ascii_lowercase + "-_"
@@ -36,18 +41,12 @@ class PlantUMLConnectionError(PlantUMLError):
     """
 
 
-class PlantUMLHTTPError(PlantUMLConnectionError):
-    """
-    Request to PlantUML server returned HTTP Error.
-    """
-
-    def __init__(self, response, content, *args, **kwdargs):
+class PlantUMLHTTPError(Exception):
+    def __init__(self, response, content):
         self.response = response
         self.content = content
-        message = "%d: %s" % (self.response.status, self.response.reason)
-        if not getattr(self, "message", None):
-            self.message = message
-        super(PlantUMLHTTPError, self).__init__(message, *args, **kwdargs)
+        message = "%d: %s" % (self.response.status_code, self.response.reason_phrase)
+        super().__init__(message)
 
 
 def deflate_and_encode(plantuml_text):
@@ -59,51 +58,51 @@ def deflate_and_encode(plantuml_text):
     )
 
 
-class PlantUML(object):
-    """Connection to a PlantUML server with optional authentication.
-
-    All parameters are optional.
-
-    :param str url: URL to the PlantUML server image CGI. defaults to
-                    http://www.plantuml.com/plantuml/svg/
-    :param dict request_opts: Extra options to be passed off to the
-                    httplib2.Http().request() call.
-    """
-
-    def __init__(self, url="http://www.plantuml.com/plantuml/svg/", request_opts={}):
-        self.HttpLib2Error = httplib2.HttpLib2Error
-        self.http = httplib2.Http()
-
+class PlantUML:
+    def __init__(self, url: str = "http://www.plantuml.com/plantuml/svg/"):
         self.url = url
-        self.request_opts = request_opts
+        self.client = httpx.Client()
 
-    def get_url(self, plantuml_text):
-        """Return the server URL for the image.
-        You can use this URL in an IMG HTML tag.
-
-        :param str plantuml_text: The plantuml markup to render
-        :returns: the plantuml server image URL
+    def process(self, plantuml_text: str) -> str:
         """
-        return self.url + deflate_and_encode(plantuml_text)
-
-    def process(self, plantuml_text):
-        """Processes the plantuml text into the raw PNG image data.
-
-        :param str plantuml_text: The plantuml markup to render
-        :returns: the raw image data
+        Processes the PlantUML text into an SVG image.
+        
+        Args:
+            plantuml_text (str): The PlantUML code.
+        
+        Returns:
+            str: The SVG content.
+        
+        Raises:
+            PlantUMLHTTPError: If the PlantUML server returns an error.
         """
-        url = self.get_url(plantuml_text)
+        # Remove any leading/trailing whitespace
+        plantuml_text = plantuml_text.strip()
+
+        # Remove code fences if present
+        plantuml_text = re.sub(r'^```plantuml\s*', '', plantuml_text, flags=re.MULTILINE)
+        plantuml_text = re.sub(r'```$', '', plantuml_text, flags=re.MULTILINE)
+
+        # Encode PlantUML text
+        encoded_text = deflate_and_encode(plantuml_text)
+
+        # Construct the final URL
+        final_url = self.url + encoded_text
+
         try:
-            response, content = self.http.request(url, **self.request_opts)
-        except self.HttpLib2Error as e:
-            raise PlantUMLConnectionError(e)
-        if response.status != 200:
-            raise PlantUMLHTTPError(response, content)
+            response = self.client.get(final_url)
+            logger.info(f"PlantUML server responded with status code {response.status_code}")
+        except httpx.RequestError as e:
+            logger.error(f"An error occurred while requesting {e.request.url!r}: {e}")
+            raise PlantUMLConnectionError(f"An error occurred while requesting {e.request.url!r}.") from e
 
-        svg_content = content.decode("utf-8")
+        if response.status_code != 200:
+            raise PlantUMLHTTPError(response, response.content)
+
+        svg_content = response.text
         svg_content = svg_content.replace("<svg ", "<svg id='mindmap' ")
 
-        # wrap in fixed height div
+        # Wrap in fixed height div
         svg_content = (
             "<div id='mindmap-wrapper' "
             "style='height: 400px; overflow: hidden;'>"
